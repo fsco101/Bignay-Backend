@@ -9,12 +9,16 @@ from typing import Tuple, Optional, List
 from datetime import datetime
 
 
-# Cloudinary configuration (loaded from environment)
-CLOUDINARY_CLOUD_NAME = os.getenv('CLOUDINARY_CLOUD_NAME', '')
-CLOUDINARY_API_KEY = os.getenv('CLOUDINARY_API_KEY', '')
-CLOUDINARY_API_SECRET = os.getenv('CLOUDINARY_API_SECRET', '')
-
 _cloudinary_configured = False
+
+
+def _get_cloudinary_config():
+    """Get Cloudinary configuration from environment (called at runtime, not import time)"""
+    return {
+        'cloud_name': os.getenv('CLOUDINARY_CLOUD_NAME', ''),
+        'api_key': os.getenv('CLOUDINARY_API_KEY', ''),
+        'api_secret': os.getenv('CLOUDINARY_API_SECRET', ''),
+    }
 
 
 def _configure_cloudinary() -> bool:
@@ -24,18 +28,26 @@ def _configure_cloudinary() -> bool:
     if _cloudinary_configured:
         return True
     
-    if not all([CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET]):
+    # Get config at runtime (after .env is loaded)
+    config = _get_cloudinary_config()
+    
+    if not all([config['cloud_name'], config['api_key'], config['api_secret']]):
+        print(f"[Cloudinary] Missing configuration:")
+        print(f"  - CLOUDINARY_CLOUD_NAME: {'SET' if config['cloud_name'] else 'MISSING'}")
+        print(f"  - CLOUDINARY_API_KEY: {'SET' if config['api_key'] else 'MISSING'}")
+        print(f"  - CLOUDINARY_API_SECRET: {'SET' if config['api_secret'] else 'MISSING'}")
         return False
     
     try:
         import cloudinary
         cloudinary.config(
-            cloud_name=CLOUDINARY_CLOUD_NAME,
-            api_key=CLOUDINARY_API_KEY,
-            api_secret=CLOUDINARY_API_SECRET,
+            cloud_name=config['cloud_name'],
+            api_key=config['api_key'],
+            api_secret=config['api_secret'],
             secure=True
         )
         _cloudinary_configured = True
+        print(f"[Cloudinary] Configured successfully for cloud: {config['cloud_name']}")
         return True
     except ImportError:
         print("Cloudinary SDK not installed. Run: pip install cloudinary")

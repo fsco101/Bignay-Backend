@@ -88,6 +88,18 @@ def init_database():
 # Initialize database
 init_database()
 
+# Initialize Cloudinary and verify configuration
+def init_cloudinary():
+    """Initialize and verify Cloudinary configuration"""
+    from utils.cloudinary_helper import is_cloudinary_configured
+    if is_cloudinary_configured():
+        print("✓ Cloudinary configured successfully")
+    else:
+        print("✗ Cloudinary not configured - image upload will fail")
+        print("  Please set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET in .env")
+
+init_cloudinary()
+
 # Register route blueprints
 app.register_blueprint(auth_bp)
 app.register_blueprint(users_bp)
