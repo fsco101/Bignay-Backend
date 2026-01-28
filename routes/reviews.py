@@ -200,6 +200,7 @@ def create_review(product_id: str):
         # Get user info
         user_doc = users_collection.find_one({'_id': ObjectId(request.user_info['user_id'])})
         user_name = f"{user_doc.get('first_name', '')} {user_doc.get('last_name', '')}".strip()
+        user_profile_image = user_doc.get('profile_image')
         
         # Create review
         review = Review(
@@ -210,6 +211,7 @@ def create_review(product_id: str):
             rating=int(rating),
             comment=filtered_comment,
             original_comment=comment,
+            user_profile_image=user_profile_image,
             is_verified_purchase=True,
         )
         

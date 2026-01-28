@@ -19,6 +19,7 @@ class Review:
     rating: int  # 1-5 stars
     comment: str  # Filtered comment (bad words removed)
     original_comment: str = ""  # Original comment before filtering
+    user_profile_image: Optional[str] = None  # User's profile image URL
     is_verified_purchase: bool = True
     is_visible: bool = True
     helpful_count: int = 0
@@ -36,6 +37,7 @@ class Review:
             'rating': self.rating,
             'comment': self.comment,
             'original_comment': self.original_comment,
+            'user_profile_image': self.user_profile_image,
             'is_verified_purchase': self.is_verified_purchase,
             'is_visible': self.is_visible,
             'helpful_count': self.helpful_count,
@@ -53,6 +55,7 @@ class Review:
             'product_id': self.product_id,
             'user_id': self.user_id,
             'user_name': self.user_name,
+            'user_profile_image': self.user_profile_image,
             'rating': self.rating,
             'comment': self.comment,
             'is_verified_purchase': self.is_verified_purchase,
@@ -72,6 +75,7 @@ class Review:
             rating=int(data.get('rating', 5)),
             comment=data.get('comment', ''),
             original_comment=data.get('original_comment', ''),
+            user_profile_image=data.get('user_profile_image'),
             is_verified_purchase=data.get('is_verified_purchase', True),
             is_visible=data.get('is_visible', True),
             helpful_count=int(data.get('helpful_count', 0)),
