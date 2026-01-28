@@ -1,0 +1,14 @@
+flask>=2.3
+flask-cors>=4.0
+pymongo>=4.6
+opencv-python>=4.8
+numpy>=1.26
+python-dotenv>=1.0
+cloudinary>=1.36
+PyJWT>=2.8
+bcrypt>=4.0
+reportlab>=4.0
+
+# TensorFlow is optional for this repo to run (heuristics are used if model files are missing)
+# If you want real ML inference, install a compatible TF build for your Python version:
+# tensorflow>=2.15
