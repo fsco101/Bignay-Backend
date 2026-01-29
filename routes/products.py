@@ -12,8 +12,12 @@ from models.product import Product
 from routes.auth import require_auth, require_admin, get_current_user
 from utils.validators import validate_required_fields, validate_positive_number
 from utils.cloudinary_helper import upload_image, upload_multiple_images, delete_image
+from utils.email_service import EmailService
 
 products_bp = Blueprint('products', __name__, url_prefix='/api/products')
+
+# Initialize email service
+email_service = EmailService()
 
 
 def _get_products_collection():
@@ -32,6 +36,97 @@ def _get_reviews_collection():
     """Get MongoDB reviews collection"""
     from flask import current_app
     return current_app.config.get('db_reviews')
+
+
+def _send_product_notification_email(user_doc: dict, product_name: str, action: str, reason: str = None, changes: list = None):
+    """Send email notification to product owner about product changes"""
+    user_email = user_doc.get('email')
+    user_name = f"{user_doc.get('first_name', '')} {user_doc.get('last_name', '')}".strip() or 'Seller'
+    
+    if action == 'updated':
+        subject = f"Your Product Has Been Updated - {product_name}"
+        title = "📝 Product Updated"
+        main_color = "#2196F3"
+        message = "Your product listing has been modified by an administrator."
+        changes_html = ""
+        if changes:
+            changes_list = "".join([f"<li style='margin: 5px 0; color: #424242;'>{change}</li>" for change in changes])
+            changes_html = f"""
+            <div style="background-color: #E3F2FD; border-left: 4px solid #2196F3; padding: 15px; margin: 20px 0; border-radius: 4px;">
+                <p style="margin: 0 0 10px 0; font-weight: bold; color: #1565C0;">Changes Made:</p>
+                <ul style="margin: 0; padding-left: 20px;">{changes_list}</ul>
+            </div>
+            """
+    elif action == 'deleted':
+        subject = f"Your Product Has Been Removed - {product_name}"
+        title = "🗑️ Product Removed"
+        main_color = "#D32F2F"
+        message = "Your product listing has been removed from the marketplace by an administrator."
+        changes_html = ""
+        if reason:
+            changes_html = f"""
+            <div style="background-color: #FFEBEE; border-left: 4px solid #D32F2F; padding: 15px; margin: 20px 0; border-radius: 4px;">
+                <p style="margin: 0; color: #C62828;"><strong>Reason:</strong> {reason}</p>
+            </div>
+            """
+    else:
+        return False
+    
+    html_body = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+    </head>
+    <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f5f5f5; margin: 0; padding: 20px;">
+        <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+            <div style="background: linear-gradient(135deg, #2E7D32 0%, #4CAF50 100%); padding: 30px; text-align: center;">
+                <h1 style="color: #ffffff; margin: 0; font-size: 24px;">🌿 Bignay Marketplace</h1>
+            </div>
+            <div style="background-color: {main_color}; padding: 15px; text-align: center;">
+                <h2 style="color: #ffffff; margin: 0; font-size: 18px;">{title}</h2>
+            </div>
+            <div style="padding: 30px;">
+                <p style="font-size: 16px; color: #212121;">Hello <strong>{user_name}</strong>,</p>
+                <p style="font-size: 15px; color: #424242; line-height: 1.6;">{message}</p>
+                <div style="background-color: #F5F5F5; border-radius: 8px; padding: 15px; margin: 20px 0;">
+                    <p style="margin: 0; color: #212121;"><strong>Product:</strong> {product_name}</p>
+                </div>
+                {changes_html}
+                <p style="font-size: 14px; color: #757575; margin-top: 30px;">
+                    If you have any questions about this action, please contact our support team.
+                </p>
+            </div>
+            <div style="background-color: #f5f5f5; padding: 20px; text-align: center;">
+                <p style="font-size: 12px; color: #757575; margin: 0;">
+                    🌿 Bignay Marketplace - Thank you for being a seller!
+                </p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    text_body = f"""
+{title}
+
+Hello {user_name},
+
+{message}
+
+Product: {product_name}
+
+If you have any questions, please contact our support team.
+
+Bignay Marketplace
+    """
+    
+    return email_service.send_email(
+        to_email=user_email,
+        subject=subject,
+        html_body=html_body,
+        text_body=text_body
+    )
 
 
 # Public routes
@@ -401,10 +496,46 @@ def update_product(product_id: str):
         
         update_fields['updated_at'] = datetime.now(timezone.utc)
         
+        # Track changes for email notification
+        changes = []
+        for field, new_value in update_fields.items():
+            if field == 'updated_at':
+                continue
+            old_value = product_doc.get(field)
+            if old_value != new_value:
+                if field == 'price':
+                    changes.append(f"Price: ₱{old_value} → ₱{new_value}")
+                elif field == 'stock':
+                    changes.append(f"Stock: {old_value} → {new_value}")
+                elif field == 'name':
+                    changes.append(f"Name: {old_value} → {new_value}")
+                elif field == 'category':
+                    changes.append(f"Category: {old_value} → {new_value}")
+                elif field == 'is_active':
+                    changes.append(f"Status: {'Active' if new_value else 'Inactive'}")
+                elif field == 'images':
+                    changes.append("Product images updated")
+                else:
+                    changes.append(f"{field.replace('_', ' ').title()} updated")
+        
         products_collection.update_one(
             {'_id': ObjectId(product_id)},
             {'$set': update_fields}
         )
+        
+        # Send email notification to product owner if product has a seller
+        seller_id = product_doc.get('seller_id')
+        if seller_id and changes:
+            users_collection = _get_users_collection()
+            if users_collection:
+                seller_doc = users_collection.find_one({'_id': ObjectId(seller_id)})
+                if seller_doc:
+                    _send_product_notification_email(
+                        user_doc=seller_doc,
+                        product_name=product_doc.get('name', 'Your product'),
+                        action='updated',
+                        changes=changes
+                    )
         
         # Get updated product
         updated_doc = products_collection.find_one({'_id': ObjectId(product_id)})
@@ -433,6 +564,24 @@ def delete_product(product_id: str):
         product_doc = products_collection.find_one({'_id': ObjectId(product_id)})
         if not product_doc:
             return jsonify({'ok': False, 'error': 'Product not found'}), 404
+        
+        # Get reason for deletion from request body
+        data = request.get_json() or {}
+        deletion_reason = data.get('reason', 'Product removed by administrator')
+        
+        # Send email notification to product owner before deleting
+        seller_id = product_doc.get('seller_id')
+        if seller_id:
+            users_collection = _get_users_collection()
+            if users_collection:
+                seller_doc = users_collection.find_one({'_id': ObjectId(seller_id)})
+                if seller_doc:
+                    _send_product_notification_email(
+                        user_doc=seller_doc,
+                        product_name=product_doc.get('name', 'Your product'),
+                        action='deleted',
+                        reason=deletion_reason
+                    )
         
         # Soft delete (deactivate) instead of hard delete
         products_collection.update_one(
@@ -536,6 +685,268 @@ def remove_product_image(product_id: str, image_index: int):
     
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+# ============================================
+# User Product Routes (for selling their own products)
+# ============================================
+
+@products_bp.route('/user/my-products', methods=['GET'])
+@require_auth
+def get_my_products():
+    """Get current user's products"""
+    try:
+        products_collection = _get_products_collection()
+        if products_collection is None:
+            return jsonify({'ok': False, 'error': 'Database not available'}), 503
+        
+        user_id = request.user_info['user_id']
+        
+        # Pagination
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
+        skip = (page - 1) * limit
+        
+        # Filters
+        search = request.args.get('search', '').strip()
+        category = request.args.get('category')
+        
+        query = {'seller_id': user_id}
+        
+        if search:
+            query['$or'] = [
+                {'name': {'$regex': search, '$options': 'i'}},
+                {'description': {'$regex': search, '$options': 'i'}},
+            ]
+        
+        if category and category != 'all':
+            query['category'] = category
+        
+        cursor = products_collection.find(query).skip(skip).limit(limit).sort('created_at', -1)
+        total = products_collection.count_documents(query)
+        
+        products = []
+        for doc in cursor:
+            product = Product.from_dict(doc)
+            product._id = str(doc['_id'])
+            products.append(product.to_public_dict())
+        
+        return jsonify({
+            'ok': True,
+            'products': products,
+            'pagination': {
+                'page': page,
+                'limit': limit,
+                'total': total,
+                'pages': (total + limit - 1) // limit
+            }
+        })
+    
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@products_bp.route('/user/create', methods=['POST'])
+@require_auth
+def user_create_product():
+    """Create a new product (for regular users to sell)"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'ok': False, 'error': 'No data provided'}), 400
+        
+        # Validate required fields
+        required = ['name', 'description', 'price', 'stock', 'category']
+        is_valid, missing = validate_required_fields(data, required)
+        if not is_valid:
+            return jsonify({'ok': False, 'errors': missing}), 400
+        
+        # Validate price
+        is_valid, error = validate_positive_number(data['price'], 'Price', min_val=0.01)
+        if not is_valid:
+            return jsonify({'ok': False, 'error': error}), 400
+        
+        # Validate stock
+        is_valid, error = validate_positive_number(data['stock'], 'Stock', min_val=0)
+        if not is_valid:
+            return jsonify({'ok': False, 'error': error}), 400
+        
+        # Get seller info (current user)
+        users_collection = _get_users_collection()
+        user_doc = users_collection.find_one({'_id': ObjectId(request.user_info['user_id'])})
+        seller_name = f"{user_doc.get('first_name', '')} {user_doc.get('last_name', '')}".strip()
+        
+        # Handle image uploads
+        images = []
+        if 'images' in data and data['images']:
+            print(f"[Products] User uploading {len(data['images'])} images")
+            results = upload_multiple_images(data['images'], folder='products')
+            for result in results:
+                if result['success']:
+                    images.append(result['url'])
+        
+        # Create product
+        product = Product(
+            name=data['name'].strip(),
+            description=data['description'].strip(),
+            price=float(data['price']),
+            stock=int(data['stock']),
+            category=data['category'].strip(),
+            seller_id=request.user_info['user_id'],
+            seller_name=seller_name or 'User',
+            images=images,
+            unit=data.get('unit', 'per item').strip(),
+            location=data.get('location', '').strip(),
+            quality=data.get('quality', 'Standard').strip(),
+            tags=data.get('tags', []),
+        )
+        
+        products_collection = _get_products_collection()
+        if products_collection is None:
+            return jsonify({'ok': False, 'error': 'Database not available'}), 503
+        
+        result = products_collection.insert_one(product.to_dict())
+        product._id = str(result.inserted_id)
+        
+        return jsonify({
+            'ok': True,
+            'message': 'Product created successfully',
+            'product': product.to_public_dict()
+        }), 201
+    
+    except Exception as e:
+        return jsonify({'ok': False, 'error': f'Failed to create product: {str(e)}'}), 500
+
+
+@products_bp.route('/user/<product_id>', methods=['PUT'])
+@require_auth
+def user_update_product(product_id: str):
+    """Update user's own product"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'ok': False, 'error': 'No data provided'}), 400
+        
+        products_collection = _get_products_collection()
+        if products_collection is None:
+            return jsonify({'ok': False, 'error': 'Database not available'}), 503
+        
+        product_doc = products_collection.find_one({'_id': ObjectId(product_id)})
+        if not product_doc:
+            return jsonify({'ok': False, 'error': 'Product not found'}), 404
+        
+        # Verify ownership
+        if product_doc.get('seller_id') != request.user_info['user_id']:
+            return jsonify({'ok': False, 'error': 'You can only edit your own products'}), 403
+        
+        # Build update document
+        update_fields = {}
+        
+        if 'name' in data:
+            update_fields['name'] = data['name'].strip()
+        
+        if 'description' in data:
+            update_fields['description'] = data['description'].strip()
+        
+        if 'price' in data:
+            is_valid, error = validate_positive_number(data['price'], 'Price', min_val=0.01)
+            if not is_valid:
+                return jsonify({'ok': False, 'error': error}), 400
+            update_fields['price'] = float(data['price'])
+        
+        if 'stock' in data:
+            is_valid, error = validate_positive_number(data['stock'], 'Stock', min_val=0)
+            if not is_valid:
+                return jsonify({'ok': False, 'error': error}), 400
+            update_fields['stock'] = int(data['stock'])
+        
+        if 'category' in data:
+            update_fields['category'] = data['category'].strip()
+        
+        if 'unit' in data:
+            update_fields['unit'] = data['unit'].strip()
+        
+        if 'location' in data:
+            update_fields['location'] = data['location'].strip()
+        
+        if 'quality' in data:
+            update_fields['quality'] = data['quality'].strip()
+        
+        if 'tags' in data:
+            update_fields['tags'] = data['tags']
+        
+        if 'is_active' in data:
+            update_fields['is_active'] = bool(data['is_active'])
+        
+        # Handle new images
+        if 'new_images' in data and data['new_images']:
+            results = upload_multiple_images(data['new_images'], folder='products')
+            new_urls = [r['url'] for r in results if r['success']]
+            current_images = product_doc.get('images', [])
+            update_fields['images'] = current_images + new_urls
+        
+        # Replace all images
+        if 'images' in data:
+            update_fields['images'] = data['images']
+        
+        if not update_fields:
+            return jsonify({'ok': False, 'error': 'No fields to update'}), 400
+        
+        update_fields['updated_at'] = datetime.now(timezone.utc)
+        
+        products_collection.update_one(
+            {'_id': ObjectId(product_id)},
+            {'$set': update_fields}
+        )
+        
+        # Get updated product
+        updated_doc = products_collection.find_one({'_id': ObjectId(product_id)})
+        product = Product.from_dict(updated_doc)
+        product._id = str(updated_doc['_id'])
+        
+        return jsonify({
+            'ok': True,
+            'message': 'Product updated successfully',
+            'product': product.to_public_dict()
+        })
+    
+    except Exception as e:
+        return jsonify({'ok': False, 'error': f'Failed to update product: {str(e)}'}), 500
+
+
+@products_bp.route('/user/<product_id>', methods=['DELETE'])
+@require_auth
+def user_delete_product(product_id: str):
+    """Delete user's own product (soft delete)"""
+    try:
+        products_collection = _get_products_collection()
+        if products_collection is None:
+            return jsonify({'ok': False, 'error': 'Database not available'}), 503
+        
+        product_doc = products_collection.find_one({'_id': ObjectId(product_id)})
+        if not product_doc:
+            return jsonify({'ok': False, 'error': 'Product not found'}), 404
+        
+        # Verify ownership
+        if product_doc.get('seller_id') != request.user_info['user_id']:
+            return jsonify({'ok': False, 'error': 'You can only delete your own products'}), 403
+        
+        # Soft delete (deactivate)
+        products_collection.update_one(
+            {'_id': ObjectId(product_id)},
+            {'$set': {
+                'is_active': False,
+                'updated_at': datetime.now(timezone.utc)
+            }}
+        )
+        
+        return jsonify({
+            'ok': True,
+            'message': 'Product deleted successfully'
+        })
+    
+    except Exception as e:
+        return jsonify({'ok': False, 'error': f'Failed to delete product: {str(e)}'}), 500
 
 
 # Admin product listing with all products (including inactive)

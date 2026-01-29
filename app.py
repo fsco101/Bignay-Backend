@@ -26,6 +26,7 @@ from utils_image import (
 
 # Import route blueprints
 from routes import auth_bp, users_bp, products_bp, orders_bp, reviews_bp
+from routes.payments import payments_bp
 
 settings = get_settings()
 
@@ -106,6 +107,7 @@ app.register_blueprint(users_bp)
 app.register_blueprint(products_bp)
 app.register_blueprint(orders_bp)
 app.register_blueprint(reviews_bp)
+app.register_blueprint(payments_bp)
 
 store = PredictionStore(settings.mongodb_uri, settings.mongodb_db, settings.mongodb_collection)
 

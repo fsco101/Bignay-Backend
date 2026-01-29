@@ -468,8 +468,8 @@ def delete_order(order_id: str):
             return jsonify({'ok': False, 'error': 'Order not found'}), 404
         
         # Check ownership (unless admin)
-        user_id = request.user_id
-        is_admin = getattr(request, 'is_admin', False)
+        user_id = request.user_info['user_id']
+        is_admin = request.user_info.get('role') == 'admin'
         
         if order['user_id'] != user_id and not is_admin:
             return jsonify({'ok': False, 'error': 'Unauthorized'}), 403
@@ -512,8 +512,8 @@ def bulk_delete_orders():
         if orders_collection is None:
             return jsonify({'ok': False, 'error': 'Database not available'}), 503
         
-        user_id = request.user_id
-        is_admin = getattr(request, 'is_admin', False)
+        user_id = request.user_info['user_id']
+        is_admin = request.user_info.get('role') == 'admin'
         
         # Convert to ObjectIds
         object_ids = [ObjectId(oid) for oid in order_ids]
@@ -533,6 +533,9 @@ def bulk_delete_orders():
             'message': f'Deleted {result.deleted_count} order(s)',
             'deleted_count': result.deleted_count
         })
+    
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
     
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500

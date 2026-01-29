@@ -20,6 +20,21 @@ class OrderStatus(str, Enum):
     REFUNDED = "refunded"
 
 
+class PaymentMethod(str, Enum):
+    """Payment method options"""
+    CASH_ON_DELIVERY = "cash_on_delivery"
+    ONLINE_PAYMENT = "online_payment"
+    WALLET = "wallet"
+
+
+class PaymentStatus(str, Enum):
+    """Payment status options"""
+    PENDING = "pending"
+    PAID = "paid"
+    FAILED = "failed"
+    REFUNDED = "refunded"
+
+
 @dataclass
 class OrderItem:
     """Individual item in an order"""
@@ -72,12 +87,16 @@ class Order:
     shipping_province: str = ""
     shipping_postal_code: str = ""
     shipping_phone: str = ""
-    payment_method: str = "cash_on_delivery"
-    payment_status: str = "pending"
+    payment_method: str = "cash_on_delivery"  # cash_on_delivery, online_payment, wallet
+    payment_status: str = "pending"  # pending, paid, failed, refunded
+    payment_reference: Optional[str] = None  # PayMongo payment ID or reference
+    paymongo_checkout_id: Optional[str] = None  # PayMongo checkout session ID
+    paymongo_payment_intent_id: Optional[str] = None  # PayMongo payment intent ID
     notes: str = ""
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     delivered_at: Optional[datetime] = None
+    paid_at: Optional[datetime] = None
     _id: Optional[str] = None
 
     def to_dict(self) -> dict:
@@ -96,10 +115,14 @@ class Order:
             'shipping_phone': self.shipping_phone,
             'payment_method': self.payment_method,
             'payment_status': self.payment_status,
+            'payment_reference': self.payment_reference,
+            'paymongo_checkout_id': self.paymongo_checkout_id,
+            'paymongo_payment_intent_id': self.paymongo_payment_intent_id,
             'notes': self.notes,
             'created_at': self.created_at,
             'updated_at': self.updated_at,
             'delivered_at': self.delivered_at,
+            'paid_at': self.paid_at,
         }
         if self._id:
             data['_id'] = self._id
@@ -124,10 +147,12 @@ class Order:
             'shipping_phone': self.shipping_phone,
             'payment_method': self.payment_method,
             'payment_status': self.payment_status,
+            'payment_reference': self.payment_reference,
             'notes': self.notes,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'delivered_at': self.delivered_at.isoformat() if self.delivered_at else None,
+            'paid_at': self.paid_at.isoformat() if self.paid_at else None,
         }
 
     @classmethod
@@ -154,8 +179,12 @@ class Order:
             shipping_phone=data.get('shipping_phone', ''),
             payment_method=data.get('payment_method', 'cash_on_delivery'),
             payment_status=data.get('payment_status', 'pending'),
+            payment_reference=data.get('payment_reference'),
+            paymongo_checkout_id=data.get('paymongo_checkout_id'),
+            paymongo_payment_intent_id=data.get('paymongo_payment_intent_id'),
             notes=data.get('notes', ''),
             created_at=data.get('created_at', datetime.now(timezone.utc)),
             updated_at=data.get('updated_at', datetime.now(timezone.utc)),
             delivered_at=data.get('delivered_at'),
+            paid_at=data.get('paid_at'),
         )

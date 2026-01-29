@@ -47,6 +47,10 @@ class Settings:
     
     # JWT Secret for auth tokens
     jwt_secret: str
+    
+    # PayMongo settings for online payments
+    paymongo_secret_key: str | None
+    paymongo_public_key: str | None
 
 
 def _get_bool(name: str, default: bool) -> bool:
@@ -83,4 +87,6 @@ def get_settings() -> Settings:
         cloudinary_api_key=os.getenv("CLOUDINARY_API_KEY"),
         cloudinary_api_secret=os.getenv("CLOUDINARY_API_SECRET"),
         jwt_secret=os.getenv("JWT_SECRET", "bignay-secret-key-change-in-production"),
+        paymongo_secret_key=os.getenv("PAYMONGO_SECRET_KEY"),
+        paymongo_public_key=os.getenv("PAYMONGO_PUBLIC_KEY"),
     )

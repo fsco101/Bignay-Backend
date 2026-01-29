@@ -223,6 +223,54 @@ def login():
         if not user_doc.get('is_active', True):
             return jsonify({'ok': False, 'error': 'Your account has been deactivated'}), 403
         
+        # Check if user is suspended
+        if user_doc.get('is_suspended'):
+            suspension_end = user_doc.get('suspension_end')
+            suspension_reason = user_doc.get('suspension_reason', 'Violation of community guidelines')
+            
+            # Check if suspension has expired
+            if suspension_end:
+                if isinstance(suspension_end, str):
+                    suspension_end = datetime.fromisoformat(suspension_end.replace('Z', '+00:00'))
+                
+                if datetime.now(timezone.utc) > suspension_end:
+                    # Suspension has expired, automatically lift it
+                    users_collection.update_one(
+                        {'_id': user_doc['_id']},
+                        {'$set': {
+                            'is_suspended': False,
+                            'suspension_type': None,
+                            'suspension_reason': None,
+                            'suspension_start': None,
+                            'suspension_end': None,
+                            'suspended_by': None,
+                            'updated_at': datetime.now(timezone.utc)
+                        }}
+                    )
+                else:
+                    # Still suspended
+                    end_date_str = suspension_end.strftime('%B %d, %Y at %I:%M %p UTC')
+                    return jsonify({
+                        'ok': False, 
+                        'error': f'Your account is suspended until {end_date_str}',
+                        'suspension': {
+                            'reason': suspension_reason,
+                            'end': suspension_end.isoformat(),
+                            'is_permanent': False
+                        }
+                    }), 403
+            else:
+                # Permanent suspension
+                return jsonify({
+                    'ok': False, 
+                    'error': 'Your account has been permanently suspended',
+                    'suspension': {
+                        'reason': suspension_reason,
+                        'end': None,
+                        'is_permanent': True
+                    }
+                }), 403
+        
         # Create user object
         user = User.from_dict(user_doc)
         user._id = str(user_doc['_id'])
@@ -315,6 +363,54 @@ def google_login():
             # Check if user is active
             if not user_doc.get('is_active', True):
                 return jsonify({'ok': False, 'error': 'Your account has been deactivated'}), 403
+            
+            # Check if user is suspended
+            if user_doc.get('is_suspended'):
+                suspension_end = user_doc.get('suspension_end')
+                suspension_reason = user_doc.get('suspension_reason', 'Violation of community guidelines')
+                
+                # Check if suspension has expired
+                if suspension_end:
+                    if isinstance(suspension_end, str):
+                        suspension_end = datetime.fromisoformat(suspension_end.replace('Z', '+00:00'))
+                    
+                    if datetime.now(timezone.utc) > suspension_end:
+                        # Suspension has expired, automatically lift it
+                        users_collection.update_one(
+                            {'_id': user_doc['_id']},
+                            {'$set': {
+                                'is_suspended': False,
+                                'suspension_type': None,
+                                'suspension_reason': None,
+                                'suspension_start': None,
+                                'suspension_end': None,
+                                'suspended_by': None,
+                                'updated_at': datetime.now(timezone.utc)
+                            }}
+                        )
+                    else:
+                        # Still suspended
+                        end_date_str = suspension_end.strftime('%B %d, %Y at %I:%M %p UTC')
+                        return jsonify({
+                            'ok': False, 
+                            'error': f'Your account is suspended until {end_date_str}',
+                            'suspension': {
+                                'reason': suspension_reason,
+                                'end': suspension_end.isoformat(),
+                                'is_permanent': False
+                            }
+                        }), 403
+                else:
+                    # Permanent suspension
+                    return jsonify({
+                        'ok': False, 
+                        'error': 'Your account has been permanently suspended',
+                        'suspension': {
+                            'reason': suspension_reason,
+                            'end': None,
+                            'is_permanent': True
+                        }
+                    }), 403
             
             user = User.from_dict(user_doc)
             user._id = str(user_doc['_id'])
