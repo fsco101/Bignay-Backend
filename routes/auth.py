@@ -259,6 +259,100 @@ def logout():
     return jsonify({'ok': True, 'message': 'Logged out successfully'})
 
 
+@auth_bp.route('/google', methods=['POST'])
+def google_login():
+    """
+    Login or register with Google OAuth
+    Expects: google_id, email, first_name, last_name, profile_image, access_token
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'ok': False, 'error': 'No data provided'}), 400
+        
+        google_id = data.get('google_id', '').strip()
+        email = data.get('email', '').strip().lower()
+        first_name = data.get('first_name', '').strip()
+        last_name = data.get('last_name', '').strip()
+        profile_image = data.get('profile_image', '').strip()
+        
+        if not google_id or not email:
+            return jsonify({'ok': False, 'error': 'Google ID and email are required'}), 400
+        
+        users_collection = _get_users_collection()
+        if users_collection is None:
+            return jsonify({'ok': False, 'error': 'Database not available'}), 503
+        
+        # Try to find existing user by google_id or email
+        user_doc = users_collection.find_one({
+            '$or': [
+                {'google_id': google_id},
+                {'email': email}
+            ]
+        })
+        
+        if user_doc:
+            # Existing user - update google_id if needed and login
+            update_fields = {
+                'last_login': datetime.now(timezone.utc),
+                'updated_at': datetime.now(timezone.utc)
+            }
+            
+            # Update google_id if user registered with email but now using Google
+            if not user_doc.get('google_id'):
+                update_fields['google_id'] = google_id
+                update_fields['auth_provider'] = 'google'
+            
+            # Update profile image if provided and not already set
+            if profile_image and not user_doc.get('profile_image'):
+                update_fields['profile_image'] = profile_image
+            
+            users_collection.update_one(
+                {'_id': user_doc['_id']},
+                {'$set': update_fields}
+            )
+            
+            # Check if user is active
+            if not user_doc.get('is_active', True):
+                return jsonify({'ok': False, 'error': 'Your account has been deactivated'}), 403
+            
+            user = User.from_dict(user_doc)
+            user._id = str(user_doc['_id'])
+            
+        else:
+            # New user - create account
+            user = User(
+                email=email,
+                password_hash='',  # No password for Google users
+                first_name=first_name or email.split('@')[0],
+                last_name=last_name or '',
+                role=UserRole.USER,
+                google_id=google_id,
+                auth_provider='google',
+                profile_image=profile_image or None,
+                is_verified=True,  # Google accounts are already verified
+            )
+            
+            result = users_collection.insert_one(user.to_dict(include_password=True))
+            user._id = str(result.inserted_id)
+        
+        # Generate token
+        token = _generate_token(
+            user._id, 
+            user.role.value if isinstance(user.role, UserRole) else user.role
+        )
+        
+        return jsonify({
+            'ok': True,
+            'message': 'Google login successful',
+            'token': token,
+            'user': user.to_public_dict()
+        })
+    
+    except Exception as e:
+        return jsonify({'ok': False, 'error': f'Google login failed: {str(e)}'}), 500
+
+
 @auth_bp.route('/verify', methods=['GET'])
 def verify():
     """Verify current token and return user info"""

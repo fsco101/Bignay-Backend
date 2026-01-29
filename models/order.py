@@ -109,7 +109,9 @@ class Order:
         """Return public order info"""
         return {
             '_id': str(self._id) if self._id else None,
+            'order_number': str(self._id) if self._id else None,
             'user_id': self.user_id,
+            'user_email': self.user_email,
             'user_name': self.user_name,
             'items': [item.to_dict() for item in self.items],
             'item_count': len(self.items),
@@ -118,9 +120,13 @@ class Order:
             'shipping_address': self.shipping_address,
             'shipping_city': self.shipping_city,
             'shipping_province': self.shipping_province,
+            'shipping_postal_code': self.shipping_postal_code,
+            'shipping_phone': self.shipping_phone,
             'payment_method': self.payment_method,
             'payment_status': self.payment_status,
+            'notes': self.notes,
             'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'delivered_at': self.delivered_at.isoformat() if self.delivered_at else None,
         }
 

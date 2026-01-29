@@ -28,6 +28,12 @@ def _get_users_collection():
     return current_app.config.get('db_users')
 
 
+def _get_reviews_collection():
+    """Get MongoDB reviews collection"""
+    from flask import current_app
+    return current_app.config.get('db_reviews')
+
+
 # Public routes
 
 @products_bp.route('/', methods=['GET'])
@@ -94,11 +100,31 @@ def list_products():
         cursor = products_collection.find(query).skip(skip).limit(limit).sort(sort_field, sort_direction)
         total = products_collection.count_documents(query)
         
+        # Get reviews collection to fetch latest review for each product
+        reviews_collection = _get_reviews_collection()
+        
         products = []
         for doc in cursor:
             product = Product.from_dict(doc)
             product._id = str(doc['_id'])
-            products.append(product.to_public_dict())
+            product_dict = product.to_public_dict()
+            
+            # Fetch the latest review for this product
+            if reviews_collection is not None:
+                latest_review = reviews_collection.find_one(
+                    {'product_id': str(doc['_id']), 'is_active': True},
+                    sort=[('created_at', -1)]
+                )
+                if latest_review:
+                    product_dict['latest_review'] = {
+                        'rating': latest_review.get('rating', 0),
+                        'comment': latest_review.get('comment', ''),
+                        'comment_filtered': latest_review.get('comment_filtered', latest_review.get('comment', '')),
+                        'user_name': latest_review.get('user_name', 'Anonymous'),
+                        'created_at': latest_review.get('created_at').isoformat() if latest_review.get('created_at') else None
+                    }
+            
+            products.append(product_dict)
         
         return jsonify({
             'ok': True,

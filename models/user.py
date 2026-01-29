@@ -33,6 +33,9 @@ class User:
     profile_image: Optional[str] = None
     is_active: bool = True
     is_verified: bool = False
+    # Google OAuth fields
+    google_id: Optional[str] = None
+    auth_provider: str = 'local'  # 'local' or 'google'
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_login: Optional[datetime] = None
@@ -70,6 +73,8 @@ class User:
             'profile_image': self.profile_image,
             'is_active': self.is_active,
             'is_verified': self.is_verified,
+            'google_id': self.google_id,
+            'auth_provider': self.auth_provider,
             'created_at': self.created_at,
             'updated_at': self.updated_at,
             'last_login': self.last_login,
@@ -97,6 +102,7 @@ class User:
             'profile_image': self.profile_image,
             'is_active': self.is_active,
             'is_verified': self.is_verified,
+            'auth_provider': self.auth_provider,
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -122,6 +128,8 @@ class User:
             profile_image=data.get('profile_image'),
             is_active=data.get('is_active', True),
             is_verified=data.get('is_verified', False),
+            google_id=data.get('google_id'),
+            auth_provider=data.get('auth_provider', 'local'),
             created_at=data.get('created_at', datetime.now(timezone.utc)),
             updated_at=data.get('updated_at', datetime.now(timezone.utc)),
             last_login=data.get('last_login'),

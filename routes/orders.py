@@ -389,10 +389,23 @@ def update_order_status(order_id: str):
             if order_doc:
                 order = Order.from_dict(order_doc)
                 order._id = str(order_doc['_id'])
+                
+                order_data = order.to_public_dict()
+                print(f"[Orders] Sending status update email for order {order_id} to {order_data.get('user_email')}")
+                
                 email_service = get_email_service()
-                email_service.send_order_receipt(order.to_public_dict(), status_changed=True)
+                if email_service.enabled:
+                    email_sent = email_service.send_order_receipt(order_data, status_changed=True)
+                    if email_sent:
+                        print(f"[Orders] Status change email sent successfully for order {order_id}")
+                    else:
+                        print(f"[Orders] Failed to send status change email for order {order_id}")
+                else:
+                    print(f"[Orders] Email service is disabled - skipping status change email")
         except Exception as email_error:
             print(f"[Orders] Failed to send status change email: {email_error}")
+            import traceback
+            traceback.print_exc()
         
         return jsonify({
             'ok': True,
