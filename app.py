@@ -27,12 +27,16 @@ from utils_image import (
 # Import route blueprints
 from routes import auth_bp, users_bp, products_bp, orders_bp, reviews_bp
 from routes.payments import payments_bp
+from routes.analytics import analytics_bp
 
 settings = get_settings()
 
 FRONTEND_DIR = BACKEND_DIR.parent / "frontend"
 
 app = Flask(__name__)
+
+# Set max content length to 50MB to handle large image uploads
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB
 
 # Configure CORS to allow connections from any origin in development
 # This is essential for mobile apps to connect to the backend
@@ -108,6 +112,7 @@ app.register_blueprint(products_bp)
 app.register_blueprint(orders_bp)
 app.register_blueprint(reviews_bp)
 app.register_blueprint(payments_bp)
+app.register_blueprint(analytics_bp)
 
 store = PredictionStore(settings.mongodb_uri, settings.mongodb_db, settings.mongodb_collection)
 

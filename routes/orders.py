@@ -5,7 +5,7 @@ Handles checkout and order management
 
 from __future__ import annotations
 from datetime import datetime, timezone
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, Response
 from bson import ObjectId
 
 from models.order import Order, OrderItem, OrderStatus
@@ -13,6 +13,7 @@ from models.product import Product
 from routes.auth import require_auth, require_admin, get_current_user
 from utils.validators import validate_required_fields
 from utils.email_service import get_email_service
+from utils.pdf_generator import generate_order_receipt_pdf, is_pdf_generation_available
 
 orders_bp = Blueprint('orders', __name__, url_prefix='/api/orders')
 
@@ -242,6 +243,108 @@ def get_order(order_id: str):
         })
     
     except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@orders_bp.route('/<order_id>/receipt', methods=['GET'])
+@require_auth
+def download_order_receipt(order_id: str):
+    """
+    Download PDF receipt for an order
+    Returns a PDF file that can be downloaded or printed
+    """
+    try:
+        if not is_pdf_generation_available():
+            return jsonify({'ok': False, 'error': 'PDF generation is not available on this server'}), 503
+        
+        orders_collection = _get_orders_collection()
+        if orders_collection is None:
+            return jsonify({'ok': False, 'error': 'Database not available'}), 503
+        
+        order_doc = orders_collection.find_one({'_id': ObjectId(order_id)})
+        if not order_doc:
+            return jsonify({'ok': False, 'error': 'Order not found'}), 404
+        
+        # Check ownership (unless admin)
+        if (order_doc.get('user_id') != request.user_info['user_id'] and 
+            request.user_info.get('role') != 'admin'):
+            return jsonify({'ok': False, 'error': 'Access denied'}), 403
+        
+        order = Order.from_dict(order_doc)
+        order._id = str(order_doc['_id'])
+        order_data = order.to_public_dict()
+        
+        # Generate PDF
+        pdf_content = generate_order_receipt_pdf(order_data)
+        if not pdf_content:
+            return jsonify({'ok': False, 'error': 'Failed to generate PDF receipt'}), 500
+        
+        # Get order number for filename
+        order_number = order_data.get('order_number', order_id)
+        filename = f"order_{order_number}_receipt.pdf"
+        
+        # Return PDF as downloadable file
+        return Response(
+            pdf_content,
+            mimetype='application/pdf',
+            headers={
+                'Content-Disposition': f'attachment; filename="{filename}"',
+                'Content-Type': 'application/pdf',
+                'Cache-Control': 'no-cache'
+            }
+        )
+    
+    except Exception as e:
+        print(f"[Orders] PDF download error: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@orders_bp.route('/<order_id>/receipt/preview', methods=['GET'])
+@require_auth
+def preview_order_receipt(order_id: str):
+    """
+    Preview PDF receipt for an order (opens in browser)
+    Returns a PDF file that opens inline in the browser
+    """
+    try:
+        if not is_pdf_generation_available():
+            return jsonify({'ok': False, 'error': 'PDF generation is not available on this server'}), 503
+        
+        orders_collection = _get_orders_collection()
+        if orders_collection is None:
+            return jsonify({'ok': False, 'error': 'Database not available'}), 503
+        
+        order_doc = orders_collection.find_one({'_id': ObjectId(order_id)})
+        if not order_doc:
+            return jsonify({'ok': False, 'error': 'Order not found'}), 404
+        
+        # Check ownership (unless admin)
+        if (order_doc.get('user_id') != request.user_info['user_id'] and 
+            request.user_info.get('role') != 'admin'):
+            return jsonify({'ok': False, 'error': 'Access denied'}), 403
+        
+        order = Order.from_dict(order_doc)
+        order._id = str(order_doc['_id'])
+        order_data = order.to_public_dict()
+        
+        # Generate PDF
+        pdf_content = generate_order_receipt_pdf(order_data)
+        if not pdf_content:
+            return jsonify({'ok': False, 'error': 'Failed to generate PDF receipt'}), 500
+        
+        # Return PDF for inline viewing
+        return Response(
+            pdf_content,
+            mimetype='application/pdf',
+            headers={
+                'Content-Disposition': 'inline',
+                'Content-Type': 'application/pdf',
+                'Cache-Control': 'no-cache'
+            }
+        )
+    
+    except Exception as e:
+        print(f"[Orders] PDF preview error: {e}")
         return jsonify({'ok': False, 'error': str(e)}), 500
 
 

@@ -45,7 +45,9 @@ class User:
     is_verified: bool = False
     # Google OAuth fields
     google_id: Optional[str] = None
-    auth_provider: str = 'local'  # 'local' or 'google'
+    # Firebase Auth fields
+    firebase_uid: Optional[str] = None
+    auth_provider: str = 'local'  # 'local', 'google', 'firebase:google.com', 'firebase:password', etc.
     # Suspension fields
     is_suspended: bool = False
     suspension_type: Optional[str] = None  # SuspensionType value
@@ -93,6 +95,7 @@ class User:
             'is_active': self.is_active,
             'is_verified': self.is_verified,
             'google_id': self.google_id,
+            'firebase_uid': self.firebase_uid,
             'auth_provider': self.auth_provider,
             'is_suspended': self.is_suspended,
             'suspension_type': self.suspension_type,
@@ -161,6 +164,7 @@ class User:
             is_active=data.get('is_active', True),
             is_verified=data.get('is_verified', False),
             google_id=data.get('google_id'),
+            firebase_uid=data.get('firebase_uid'),
             auth_provider=data.get('auth_provider', 'local'),
             is_suspended=data.get('is_suspended', False),
             suspension_type=data.get('suspension_type'),

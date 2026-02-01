@@ -163,16 +163,32 @@ def update_profile_image():
         if not data or 'image' not in data:
             return jsonify({'ok': False, 'error': 'Image data required'}), 400
         
+        image_data = data['image']
+        
+        # Validate image data
+        if not image_data or not isinstance(image_data, str):
+            return jsonify({'ok': False, 'error': 'Invalid image data'}), 400
+        
+        if len(image_data) < 100:
+            return jsonify({'ok': False, 'error': 'Image data too short - please select a valid image'}), 400
+        
+        print(f"[Users] Uploading profile image for user {request.user_info['user_id']}")
+        print(f"[Users] Image data type: {'data URL' if image_data.startswith('data:') else 'URL' if image_data.startswith('http') else 'base64'}")
+        print(f"[Users] Image data length: {len(image_data)}")
+        
         from utils.cloudinary_helper import upload_image
         
         success, url_or_error, public_id = upload_image(
-            data['image'],
+            image_data,
             folder='profile_images',
             public_id=f"user_{request.user_info['user_id']}"
         )
         
         if not success:
+            print(f"[Users] Profile image upload failed: {url_or_error}")
             return jsonify({'ok': False, 'error': url_or_error}), 400
+        
+        print(f"[Users] Profile image uploaded successfully: {url_or_error}")
         
         # Update user profile image
         users_collection = _get_users_collection()
@@ -191,6 +207,7 @@ def update_profile_image():
         })
     
     except Exception as e:
+        print(f"[Users] Profile image update error: {str(e)}")
         return jsonify({'ok': False, 'error': str(e)}), 500
 
 

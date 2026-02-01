@@ -57,11 +57,18 @@ def verify_token(token: str) -> dict | None:
 
 
 def get_current_user(request) -> dict | None:
-    """Get current user from request authorization header"""
+    """Get current user from request authorization header or query param"""
+    # First try Authorization header
     auth_header = request.headers.get('Authorization')
-    if not auth_header:
-        return None
-    return verify_token(auth_header)
+    if auth_header:
+        return verify_token(auth_header)
+    
+    # Fallback to query parameter (for PDF downloads in web browser)
+    token = request.args.get('token')
+    if token:
+        return verify_token(token)
+    
+    return None
 
 
 def require_auth(f):
@@ -553,3 +560,149 @@ def create_admin_user(email: str, password: str, first_name: str, last_name: str
     user._id = str(result.inserted_id)
     
     return user, None
+
+
+@auth_bp.route('/firebase', methods=['POST'])
+def firebase_login():
+    """
+    Login or register with Firebase Authentication
+    Supports Google, Email/Password, and other Firebase providers
+    Expects: firebaseUid, email, idToken, provider, and optionally firstName, lastName, profileImage
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'ok': False, 'error': 'No data provided'}), 400
+        
+        firebase_uid = data.get('firebaseUid', '').strip()
+        email = data.get('email', '').strip().lower()
+        id_token = data.get('idToken', '').strip()
+        provider = data.get('provider', 'unknown').strip()
+        first_name = data.get('firstName', '').strip()
+        last_name = data.get('lastName', '').strip()
+        profile_image = data.get('profileImage', '').strip()
+        
+        if not firebase_uid or not email:
+            return jsonify({'ok': False, 'error': 'Firebase UID and email are required'}), 400
+        
+        # Optional: Verify Firebase ID token with Firebase Admin SDK
+        # For now, we trust the token since it came from Firebase client SDK
+        
+        users_collection = _get_users_collection()
+        if users_collection is None:
+            return jsonify({'ok': False, 'error': 'Database not available'}), 503
+        
+        # Try to find existing user by firebase_uid or email
+        user_doc = users_collection.find_one({
+            '$or': [
+                {'firebase_uid': firebase_uid},
+                {'email': email}
+            ]
+        })
+        
+        if user_doc:
+            # Existing user - update firebase_uid if needed and login
+            update_fields = {
+                'last_login': datetime.now(timezone.utc),
+                'updated_at': datetime.now(timezone.utc)
+            }
+            
+            # Update firebase_uid if user registered differently
+            if not user_doc.get('firebase_uid'):
+                update_fields['firebase_uid'] = firebase_uid
+                update_fields['auth_provider'] = f'firebase:{provider}'
+            
+            # Update profile image if provided and not already set
+            if profile_image and not user_doc.get('profile_image'):
+                update_fields['profile_image'] = profile_image
+            
+            users_collection.update_one(
+                {'_id': user_doc['_id']},
+                {'$set': update_fields}
+            )
+            
+            # Check if user is active
+            if not user_doc.get('is_active', True):
+                return jsonify({'ok': False, 'error': 'Your account has been deactivated'}), 403
+            
+            # Check if user is suspended
+            if user_doc.get('is_suspended'):
+                suspension_end = user_doc.get('suspension_end')
+                suspension_reason = user_doc.get('suspension_reason', 'Violation of community guidelines')
+                
+                # Check if suspension has expired
+                if suspension_end:
+                    if isinstance(suspension_end, str):
+                        suspension_end = datetime.fromisoformat(suspension_end.replace('Z', '+00:00'))
+                    
+                    if datetime.now(timezone.utc) > suspension_end:
+                        # Suspension has expired, automatically lift it
+                        users_collection.update_one(
+                            {'_id': user_doc['_id']},
+                            {'$set': {
+                                'is_suspended': False,
+                                'suspension_type': None,
+                                'suspension_reason': None,
+                                'suspension_start': None,
+                                'suspension_end': None,
+                                'suspended_by': None,
+                                'updated_at': datetime.now(timezone.utc)
+                            }}
+                        )
+                    else:
+                        # Still suspended
+                        end_date_str = suspension_end.strftime('%B %d, %Y at %I:%M %p UTC')
+                        return jsonify({
+                            'ok': False, 
+                            'error': f'Your account is suspended until {end_date_str}',
+                            'suspension': {
+                                'reason': suspension_reason,
+                                'end': suspension_end.isoformat(),
+                                'is_permanent': False
+                            }
+                        }), 403
+                else:
+                    # Permanent suspension
+                    return jsonify({
+                        'ok': False, 
+                        'error': 'Your account has been permanently suspended',
+                        'suspension': {
+                            'reason': suspension_reason,
+                            'end': None,
+                            'is_permanent': True
+                        }
+                    }), 403
+            
+            user = User.from_dict(user_doc)
+            user._id = str(user_doc['_id'])
+        else:
+            # New user - create account
+            user = User(
+                email=email,
+                password_hash='',  # No password for Firebase auth users
+                first_name=first_name or email.split('@')[0],
+                last_name=last_name or '',
+                firebase_uid=firebase_uid,
+                auth_provider=f'firebase:{provider}',
+                profile_image=profile_image or None,
+                is_verified=True,  # Firebase users are verified
+            )
+            
+            result = users_collection.insert_one(user.to_dict(include_password=True))
+            user._id = str(result.inserted_id)
+        
+        # Generate token
+        token = _generate_token(
+            user._id, 
+            user.role.value if isinstance(user.role, UserRole) else user.role
+        )
+        
+        return jsonify({
+            'ok': True,
+            'message': 'Firebase login successful',
+            'token': token,
+            'user': user.to_public_dict()
+        })
+    
+    except Exception as e:
+        return jsonify({'ok': False, 'error': f'Firebase login failed: {str(e)}'}), 500

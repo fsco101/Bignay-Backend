@@ -11,6 +11,53 @@ from email.mime.application import MIMEApplication
 from datetime import datetime
 from io import BytesIO
 from typing import Optional, Dict, Any, List
+from pathlib import Path
+
+# ============================================================================
+# DIRECT .ENV FILE LOADING
+# ============================================================================
+
+_UTILS_DIR = Path(__file__).resolve().parent
+_BACKEND_DIR = _UTILS_DIR.parent
+_ENV_FILE = _BACKEND_DIR / ".env"
+
+def _load_env_file():
+    """Load and parse .env file directly"""
+    env_vars = {}
+    if _ENV_FILE.exists():
+        try:
+            with open(_ENV_FILE, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    if '=' in line:
+                        key, _, value = line.partition('=')
+                        key = key.strip()
+                        value = value.strip()
+                        if (value.startswith('"') and value.endswith('"')) or \
+                           (value.startswith("'") and value.endswith("'")):
+                            value = value[1:-1]
+                        env_vars[key] = value
+        except Exception as e:
+            print(f"[EmailService] Error reading .env: {e}")
+    return env_vars
+
+_ENV_VARS = _load_env_file()
+
+# SMTP Configuration from .env
+SMTP_HOST = _ENV_VARS.get('SMTP_HOST', '') or os.environ.get('SMTP_HOST', 'smtp.gmail.com')
+SMTP_PORT = int(_ENV_VARS.get('SMTP_PORT', '') or os.environ.get('SMTP_PORT', '587'))
+SMTP_USER = _ENV_VARS.get('SMTP_USER', '') or os.environ.get('SMTP_USER', '')
+SMTP_PASSWORD = _ENV_VARS.get('SMTP_PASSWORD', '') or os.environ.get('SMTP_PASSWORD', '')
+SMTP_FROM_EMAIL = _ENV_VARS.get('SMTP_FROM_EMAIL', '') or os.environ.get('SMTP_FROM_EMAIL', SMTP_USER)
+SMTP_FROM_NAME = _ENV_VARS.get('SMTP_FROM_NAME', '') or os.environ.get('SMTP_FROM_NAME', 'Bignay Marketplace')
+
+print(f"[EmailService] SMTP Config loaded:")
+print(f"  - Host: {SMTP_HOST}")
+print(f"  - Port: {SMTP_PORT}")
+print(f"  - User: {SMTP_USER[:10]}..." if SMTP_USER else "  - User: NOT SET")
+print(f"  - Password: {'*' * 8}" if SMTP_PASSWORD else "  - Password: NOT SET")
 
 # Try to import reportlab for PDF generation
 try:
@@ -21,9 +68,10 @@ try:
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
     from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
     REPORTLAB_AVAILABLE = True
+    print("[EmailService] ✓ reportlab available - PDF generation enabled")
 except ImportError:
     REPORTLAB_AVAILABLE = False
-    print("[EmailService] reportlab not installed - PDF generation disabled")
+    print("[EmailService] ✗ reportlab not installed - PDF generation disabled")
 
 
 class EmailService:
@@ -31,18 +79,19 @@ class EmailService:
     
     def __init__(self):
         """Initialize email service with environment configuration"""
-        self.smtp_host = os.environ.get('SMTP_HOST', 'smtp.gmail.com')
-        self.smtp_port = int(os.environ.get('SMTP_PORT', 587))
-        self.smtp_user = os.environ.get('SMTP_USER', '')
-        self.smtp_password = os.environ.get('SMTP_PASSWORD', '')
-        self.from_email = os.environ.get('SMTP_FROM_EMAIL', self.smtp_user)
-        self.from_name = os.environ.get('SMTP_FROM_NAME', 'Bignay Marketplace')
+        # Use module-level constants loaded from .env
+        self.smtp_host = SMTP_HOST
+        self.smtp_port = SMTP_PORT
+        self.smtp_user = SMTP_USER
+        self.smtp_password = SMTP_PASSWORD
+        self.from_email = SMTP_FROM_EMAIL or self.smtp_user
+        self.from_name = SMTP_FROM_NAME
         self.enabled = bool(self.smtp_user and self.smtp_password)
         
         if not self.enabled:
-            print("[EmailService] SMTP credentials not configured - email disabled")
+            print("[EmailService] ✗ SMTP credentials not configured - email disabled")
         else:
-            print(f"[EmailService] Configured with {self.smtp_host}:{self.smtp_port}")
+            print(f"[EmailService] ✓ Configured with {self.smtp_host}:{self.smtp_port}")
     
     def _get_smtp_connection(self):
         """Create and return SMTP connection"""

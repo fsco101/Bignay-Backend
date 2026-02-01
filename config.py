@@ -9,19 +9,29 @@ BACKEND_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BACKEND_DIR.parent
 
 # Load .env file (try backend folder first, then repo root)
+_env_loaded = False
 try:
     from dotenv import load_dotenv  # type: ignore
 
     # Try backend folder first
     backend_env = BACKEND_DIR / ".env"
     if backend_env.exists():
-        load_dotenv(backend_env)
+        load_dotenv(backend_env, override=True)
+        _env_loaded = True
+        print(f"[Config] Loaded .env from {backend_env}")
     else:
         # Fallback to repo root
-        load_dotenv(REPO_ROOT / ".env")
-except Exception:
-    # If python-dotenv isn't installed (or .env is missing), continue.
-    pass
+        root_env = REPO_ROOT / ".env"
+        if root_env.exists():
+            load_dotenv(root_env, override=True)
+            _env_loaded = True
+            print(f"[Config] Loaded .env from {root_env}")
+        else:
+            print(f"[Config] Warning: No .env file found")
+except ImportError:
+    print("[Config] python-dotenv not installed, using system env vars")
+except Exception as e:
+    print(f"[Config] Error loading .env: {e}")
 
 
 @dataclass(frozen=True)

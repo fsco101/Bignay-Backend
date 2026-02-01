@@ -380,16 +380,35 @@ def create_product():
         images = []
         if 'images' in data and data['images']:
             print(f"[Products] Received {len(data['images'])} images to upload")
-            results = upload_multiple_images(data['images'], folder='products')
-            for result in results:
-                if result['success']:
-                    images.append(result['url'])
-                    print(f"[Products] Image uploaded successfully: {result['url']}")
-                else:
-                    print(f"[Products] Image upload failed: {result.get('error', 'Unknown error')}")
-            print(f"[Products] Total images uploaded successfully: {len(images)}")
+            # Filter out empty strings and None values
+            valid_images = [img for img in data['images'] if img and isinstance(img, str) and len(img) > 50]
+            print(f"[Products] Valid images to process: {len(valid_images)}")
+            
+            if valid_images:
+                results = upload_multiple_images(valid_images, folder='products')
+                for result in results:
+                    if result['success']:
+                        images.append(result['url'])
+                        print(f"[Products] Image uploaded successfully: {result['url']}")
+                    else:
+                        print(f"[Products] Image upload failed: {result.get('error', 'Unknown error')}")
+                print(f"[Products] Total images uploaded successfully: {len(images)}")
+            else:
+                print("[Products] No valid images after filtering")
         else:
             print("[Products] No images provided in request")
+        
+        # Also handle single 'image' field for backward compatibility
+        if 'image' in data and data['image'] and not images:
+            print(f"[Products] Processing single 'image' field")
+            single_image = data['image']
+            if isinstance(single_image, str) and len(single_image) > 50:
+                result = upload_image(single_image, folder='products')
+                if result[0]:  # success
+                    images.append(result[1])
+                    print(f"[Products] Single image uploaded: {result[1]}")
+                else:
+                    print(f"[Products] Single image upload failed: {result[1]}")
         
         # Create product
         product = Product(
@@ -482,14 +501,40 @@ def update_product(product_id: str):
         
         # Handle new images
         if 'new_images' in data and data['new_images']:
-            results = upload_multiple_images(data['new_images'], folder='products')
-            new_urls = [r['url'] for r in results if r['success']]
-            current_images = product_doc.get('images', [])
-            update_fields['images'] = current_images + new_urls
+            print(f"[Products] Admin update: Processing {len(data['new_images'])} new images")
+            valid_new_images = [img for img in data['new_images'] if img and isinstance(img, str) and len(img) > 50]
+            if valid_new_images:
+                results = upload_multiple_images(valid_new_images, folder='products')
+                new_urls = [r['url'] for r in results if r['success']]
+                current_images = product_doc.get('images', [])
+                update_fields['images'] = current_images + new_urls
         
-        # Replace all images
+        # Replace all images - but need to process any base64 images
         if 'images' in data:
-            update_fields['images'] = data['images']
+            incoming_images = data['images']
+            if incoming_images and isinstance(incoming_images, list):
+                processed_images = []
+                for img in incoming_images:
+                    if not img or not isinstance(img, str):
+                        continue
+                    # Check if this is already a URL (existing image)
+                    if img.startswith(('http://', 'https://')):
+                        processed_images.append(img)
+                        print(f"[Products] Admin update: Keeping existing image URL")
+                    # Check if it's a base64 data URL that needs uploading
+                    elif img.startswith('data:') or len(img) > 200:
+                        print(f"[Products] Admin update: Uploading new base64 image")
+                        success, url_or_error, _ = upload_image(img, folder='products')
+                        if success:
+                            processed_images.append(url_or_error)
+                            print(f"[Products] Admin update: New image uploaded: {url_or_error}")
+                        else:
+                            print(f"[Products] Admin update: Failed to upload image: {url_or_error}")
+                
+                update_fields['images'] = processed_images
+                print(f"[Products] Admin update: Total processed images: {len(processed_images)}")
+            else:
+                update_fields['images'] = []
         
         if not update_fields:
             return jsonify({'ok': False, 'error': 'No fields to update'}), 400
@@ -527,7 +572,7 @@ def update_product(product_id: str):
         seller_id = product_doc.get('seller_id')
         if seller_id and changes:
             users_collection = _get_users_collection()
-            if users_collection:
+            if users_collection is not None:
                 seller_doc = users_collection.find_one({'_id': ObjectId(seller_id)})
                 if seller_doc:
                     _send_product_notification_email(
@@ -573,7 +618,7 @@ def delete_product(product_id: str):
         seller_id = product_doc.get('seller_id')
         if seller_id:
             users_collection = _get_users_collection()
-            if users_collection:
+            if users_collection is not None:
                 seller_doc = users_collection.find_one({'_id': ObjectId(seller_id)})
                 if seller_doc:
                     _send_product_notification_email(
@@ -780,10 +825,30 @@ def user_create_product():
         images = []
         if 'images' in data and data['images']:
             print(f"[Products] User uploading {len(data['images'])} images")
-            results = upload_multiple_images(data['images'], folder='products')
-            for result in results:
-                if result['success']:
-                    images.append(result['url'])
+            # Filter out empty strings and None values
+            valid_images = [img for img in data['images'] if img and isinstance(img, str) and len(img) > 50]
+            print(f"[Products] Valid user images to process: {len(valid_images)}")
+            
+            if valid_images:
+                results = upload_multiple_images(valid_images, folder='products')
+                for result in results:
+                    if result['success']:
+                        images.append(result['url'])
+                        print(f"[Products] User image uploaded: {result['url']}")
+                    else:
+                        print(f"[Products] User image upload failed: {result.get('error', 'Unknown error')}")
+        
+        # Also handle single 'image' field for backward compatibility
+        if 'image' in data and data['image'] and not images:
+            print(f"[Products] Processing single 'image' field for user")
+            single_image = data['image']
+            if isinstance(single_image, str) and len(single_image) > 50:
+                result = upload_image(single_image, folder='products')
+                if result[0]:  # success
+                    images.append(result[1])
+                    print(f"[Products] Single user image uploaded: {result[1]}")
+                else:
+                    print(f"[Products] Single user image upload failed: {result[1]}")
         
         # Create product
         product = Product(
@@ -880,14 +945,40 @@ def user_update_product(product_id: str):
         
         # Handle new images
         if 'new_images' in data and data['new_images']:
-            results = upload_multiple_images(data['new_images'], folder='products')
-            new_urls = [r['url'] for r in results if r['success']]
-            current_images = product_doc.get('images', [])
-            update_fields['images'] = current_images + new_urls
+            print(f"[Products] User update: Processing {len(data['new_images'])} new images")
+            valid_new_images = [img for img in data['new_images'] if img and isinstance(img, str) and len(img) > 50]
+            if valid_new_images:
+                results = upload_multiple_images(valid_new_images, folder='products')
+                new_urls = [r['url'] for r in results if r['success']]
+                current_images = product_doc.get('images', [])
+                update_fields['images'] = current_images + new_urls
         
-        # Replace all images
+        # Replace all images - but need to process any base64 images
         if 'images' in data:
-            update_fields['images'] = data['images']
+            incoming_images = data['images']
+            if incoming_images and isinstance(incoming_images, list):
+                processed_images = []
+                for img in incoming_images:
+                    if not img or not isinstance(img, str):
+                        continue
+                    # Check if this is already a URL (existing image)
+                    if img.startswith(('http://', 'https://')):
+                        processed_images.append(img)
+                        print(f"[Products] User update: Keeping existing image URL")
+                    # Check if it's a base64 data URL that needs uploading
+                    elif img.startswith('data:') or len(img) > 200:
+                        print(f"[Products] User update: Uploading new base64 image")
+                        success, url_or_error, _ = upload_image(img, folder='products')
+                        if success:
+                            processed_images.append(url_or_error)
+                            print(f"[Products] User update: New image uploaded: {url_or_error}")
+                        else:
+                            print(f"[Products] User update: Failed to upload image: {url_or_error}")
+                
+                update_fields['images'] = processed_images
+                print(f"[Products] User update: Total processed images: {len(processed_images)}")
+            else:
+                update_fields['images'] = []
         
         if not update_fields:
             return jsonify({'ok': False, 'error': 'No fields to update'}), 400
