@@ -337,7 +337,8 @@ def get_admin_sales_analytics():
             {
                 'seller_id': item['_id']['seller_id'],
                 'seller_name': item['_id']['seller_name'] or 'Unknown',
-                'revenue': round(item['revenue'], 2),
+                'seller_email': '',  # Add email if needed
+                'total_sales': round(item['revenue'], 2),
                 'order_count': item['order_count']
             }
             for item in seller_result
@@ -363,7 +364,7 @@ def get_admin_sales_analytics():
             {
                 'method': item['_id'] or 'unknown',
                 'count': item['count'],
-                'amount': round(item['amount'], 2)
+                'total': round(item['amount'], 2)
             }
             for item in payment_result
         ]
