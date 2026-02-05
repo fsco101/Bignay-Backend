@@ -28,6 +28,8 @@ from utils_image import (
 from routes import auth_bp, users_bp, products_bp, orders_bp, reviews_bp
 from routes.payments import payments_bp
 from routes.analytics import analytics_bp
+from routes.training import training_bp
+from routes.forum import forum_bp
 
 settings = get_settings()
 
@@ -76,6 +78,12 @@ def init_database():
             app.config['db_reviews'].create_index('product_id')
             app.config['db_reviews'].create_index('user_id')
             
+            # Forum collection
+            app.config['db_forum'] = db['forum']
+            app.config['db_forum'].create_index('category')
+            app.config['db_forum'].create_index('is_published')
+            app.config['db_forum'].create_index([('title', 'text'), ('content', 'text')])
+            
             print("✓ MongoDB collections initialized successfully")
         except Exception as e:
             print(f"✗ Failed to initialize MongoDB: {e}")
@@ -83,11 +91,13 @@ def init_database():
             app.config['db_products'] = None
             app.config['db_orders'] = None
             app.config['db_reviews'] = None
+            app.config['db_forum'] = None
     else:
         app.config['db_users'] = None
         app.config['db_products'] = None
         app.config['db_orders'] = None
         app.config['db_reviews'] = None
+        app.config['db_forum'] = None
         print("✗ MongoDB URI not configured - marketplace features will be disabled")
 
 # Initialize database
@@ -113,6 +123,8 @@ app.register_blueprint(orders_bp)
 app.register_blueprint(reviews_bp)
 app.register_blueprint(payments_bp)
 app.register_blueprint(analytics_bp)
+app.register_blueprint(training_bp)
+app.register_blueprint(forum_bp)
 
 store = PredictionStore(settings.mongodb_uri, settings.mongodb_db, settings.mongodb_collection)
 
@@ -122,6 +134,63 @@ leaf_model = KerasClassifier(settings.leaf_model_path, classes=["healthy", "mold
 
 fruit_fallback = HeuristicFruitClassifier()
 leaf_fallback = HeuristicLeafClassifier()
+
+# Confidence threshold for Bignay detection
+# If confidence is below this threshold, the image might not be a Bignay
+BIGNAY_CONFIDENCE_THRESHOLD = 0.60
+# Minimum acceptable confidence to consider image might be related
+MIN_CONFIDENCE_THRESHOLD = 0.40
+
+
+def _is_bignay_image(confidence: float, features: Any) -> dict:
+    """
+    Determines if the image is likely a Bignay fruit or leaf based on:
+    1. Model confidence score
+    2. Image features (color analysis)
+    
+    Returns a dict with detection status and reason.
+    """
+    # Check confidence threshold
+    if confidence < MIN_CONFIDENCE_THRESHOLD:
+        return {
+            "is_bignay": False,
+            "confidence_level": "very_low",
+            "reason": "The image does not appear to be a Bignay fruit or leaf. The model confidence is too low."
+        }
+    
+    if confidence < BIGNAY_CONFIDENCE_THRESHOLD:
+        return {
+            "is_bignay": False,
+            "confidence_level": "low", 
+            "reason": "The image might not be a Bignay. Please ensure you're scanning a Bignay fruit or leaf."
+        }
+    
+    # Additional color-based validation for Bignay
+    # Bignay fruits are typically dark purple/red when ripe, green when unripe
+    # Bignay leaves are typically green
+    hsv_mean = features.color_hsv_mean
+    h, s, v = hsv_mean
+    
+    # Very unusual colors that don't match Bignay (e.g., bright blue, orange, yellow)
+    # HSV hue ranges: Red ~0-10, 160-180; Green ~35-85; Purple ~120-160
+    is_typical_bignay_color = (
+        (h <= 20) or  # Red/dark red
+        (h >= 140) or  # Purple/dark purple  
+        (30 <= h <= 90)  # Green (for unripe or leaves)
+    )
+    
+    if not is_typical_bignay_color and s > 50:
+        return {
+            "is_bignay": False,
+            "confidence_level": "color_mismatch",
+            "reason": "The image color profile does not match typical Bignay fruit or leaf colors."
+        }
+    
+    return {
+        "is_bignay": True,
+        "confidence_level": "high" if confidence >= 0.75 else "medium",
+        "reason": None
+    }
 
 
 def _ripeness_stage_from_fruit_class(fruit_class: str) -> str | None:
@@ -264,38 +333,77 @@ def predict():
     ripeness_stage = fruit_obj.get("ripeness_stage") if fruit_obj else None
     quality = fruit_obj.get("quality") if fruit_obj else None
 
+    # Check if the image is actually a Bignay
+    current_confidence = float((fruit_obj or leaf_obj or {}).get("confidence", 0.0))
+    bignay_detection = _is_bignay_image(current_confidence, features)
+
     rec = recommend(ripeness_stage=ripeness_stage, mold_present=mold_present, quality=quality)
 
-    response = {
-        # Backwards-compatible fields used by existing frontend
-        "result": (fruit_obj or leaf_obj or {}).get("class", "unknown"),
-        "confidence": float((fruit_obj or leaf_obj or {}).get("confidence", 0.0)),
+    # If not detected as Bignay, modify the response accordingly
+    if not bignay_detection["is_bignay"]:
+        response = {
+            "result": "not_bignay",
+            "confidence": current_confidence,
+            "subject": subject,
+            "image_sha256": image_sha256,
+            "fruit": None,
+            "leaf": None,
+            "is_bignay": False,
+            "detection": bignay_detection,
+            "color": {
+                "hsv_mean": features.color_hsv_mean,
+                "lab_mean": features.color_lab_mean,
+            },
+            "size": {
+                "px_diameter": features.size_px_diameter,
+                "mask_coverage": features.mask_coverage,
+            },
+            "recommendation": {
+                "primary": "Please scan a Bignay fruit or leaf",
+                "alternatives": [],
+                "reason": bignay_detection["reason"],
+            },
+            "debug": {
+                "mold_heuristic": mold_heuristic,
+                "fruit_model_available": fruit_model.available(),
+                "leaf_model_available": leaf_model.available(),
+                "detection_reason": bignay_detection["reason"],
+            },
+            "time": datetime.now(timezone.utc).isoformat(),
+        }
+    else:
+        response = {
+            # Backwards-compatible fields used by existing frontend
+            "result": (fruit_obj or leaf_obj or {}).get("class", "unknown"),
+            "confidence": current_confidence,
+            "is_bignay": True,
+            "detection": bignay_detection,
 
-        # Extended fields
-        "subject": subject,
-        "image_sha256": image_sha256,
-        "fruit": fruit_obj,
-        "leaf": leaf_obj,
-        "color": {
-            "hsv_mean": features.color_hsv_mean,
-            "lab_mean": features.color_lab_mean,
-        },
-        "size": {
-            "px_diameter": features.size_px_diameter,
-            "mask_coverage": features.mask_coverage,
-        },
-        "recommendation": {
-            "primary": rec.primary,
-            "alternatives": rec.alternatives,
-            "reason": rec.reason,
-        },
-        "debug": {
-            "mold_heuristic": mold_heuristic,
-            "fruit_model_available": fruit_model.available(),
-            "leaf_model_available": leaf_model.available(),
-        },
-        "time": datetime.now(timezone.utc).isoformat(),
-    }
+            # Extended fields
+            "subject": subject,
+            "image_sha256": image_sha256,
+            "fruit": fruit_obj,
+            "leaf": leaf_obj,
+            "color": {
+                "hsv_mean": features.color_hsv_mean,
+                "lab_mean": features.color_lab_mean,
+            },
+            "size": {
+                "px_diameter": features.size_px_diameter,
+                "mask_coverage": features.mask_coverage,
+            },
+            "recommendation": {
+                "primary": rec.primary,
+                "alternatives": rec.alternatives,
+                "reason": rec.reason,
+            },
+            "debug": {
+                "mold_heuristic": mold_heuristic,
+                "fruit_model_available": fruit_model.available(),
+                "leaf_model_available": leaf_model.available(),
+            },
+            "time": datetime.now(timezone.utc).isoformat(),
+        }
 
     # Store to MongoDB (metadata by default)
     record = {

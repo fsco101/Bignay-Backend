@@ -646,6 +646,41 @@ def delete_product(product_id: str):
         return jsonify({'ok': False, 'error': f'Failed to delete product: {str(e)}'}), 500
 
 
+@products_bp.route('/<product_id>/restore', methods=['PUT'])
+@require_admin
+def restore_product(product_id: str):
+    """Restore a product (admin only)"""
+    try:
+        products_collection = _get_products_collection()
+        if products_collection is None:
+            return jsonify({'ok': False, 'error': 'Database not available'}), 503
+        
+        product_doc = products_collection.find_one({'_id': ObjectId(product_id)})
+        if not product_doc:
+            return jsonify({'ok': False, 'error': 'Product not found'}), 404
+        
+        # Check if already active
+        if product_doc.get('is_active', True):
+            return jsonify({'ok': False, 'error': 'Product is already active'}), 400
+        
+        # Restore (reactivate)
+        products_collection.update_one(
+            {'_id': ObjectId(product_id)},
+            {'$set': {
+                'is_active': True,
+                'updated_at': datetime.now(timezone.utc)
+            }}
+        )
+        
+        return jsonify({
+            'ok': True,
+            'message': 'Product restored successfully'
+        })
+    
+    except Exception as e:
+        return jsonify({'ok': False, 'error': f'Failed to restore product: {str(e)}'}), 500
+
+
 @products_bp.route('/<product_id>/images', methods=['POST'])
 @require_admin
 def add_product_images(product_id: str):
@@ -1038,6 +1073,45 @@ def user_delete_product(product_id: str):
     
     except Exception as e:
         return jsonify({'ok': False, 'error': f'Failed to delete product: {str(e)}'}), 500
+
+
+@products_bp.route('/user/<product_id>/restore', methods=['PUT'])
+@require_auth
+def user_restore_product(product_id: str):
+    """Restore user's own product (reactivate)"""
+    try:
+        products_collection = _get_products_collection()
+        if products_collection is None:
+            return jsonify({'ok': False, 'error': 'Database not available'}), 503
+        
+        product_doc = products_collection.find_one({'_id': ObjectId(product_id)})
+        if not product_doc:
+            return jsonify({'ok': False, 'error': 'Product not found'}), 404
+        
+        # Verify ownership
+        if product_doc.get('seller_id') != request.user_info['user_id']:
+            return jsonify({'ok': False, 'error': 'You can only restore your own products'}), 403
+        
+        # Check if already active
+        if product_doc.get('is_active', True):
+            return jsonify({'ok': False, 'error': 'Product is already active'}), 400
+        
+        # Restore (reactivate)
+        products_collection.update_one(
+            {'_id': ObjectId(product_id)},
+            {'$set': {
+                'is_active': True,
+                'updated_at': datetime.now(timezone.utc)
+            }}
+        )
+        
+        return jsonify({
+            'ok': True,
+            'message': 'Product restored successfully'
+        })
+    
+    except Exception as e:
+        return jsonify({'ok': False, 'error': f'Failed to restore product: {str(e)}'}), 500
 
 
 # Admin product listing with all products (including inactive)
