@@ -105,7 +105,7 @@ def get_post(post_id: str):
             return jsonify({'ok': False, 'error': 'Post not found'}), 404
         
         # Check if published (unless admin)
-        user = get_current_user()
+        user = get_current_user(request)
         is_admin = user and user.get('role') == 'admin'
         
         if not post_doc.get('is_published') and not is_admin:

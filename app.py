@@ -22,10 +22,12 @@ from utils_image import (
     resize_for_model,
     safe_json,
     sha256_bytes,
+    assess_image_quality,
+    enhance_image_for_detection,
 )
 
 # Import route blueprints
-from routes import auth_bp, users_bp, products_bp, orders_bp, reviews_bp
+from routes import auth_bp, users_bp, products_bp, orders_bp, reviews_bp, chatbot_bp
 from routes.payments import payments_bp
 from routes.analytics import analytics_bp
 from routes.training import training_bp
@@ -36,6 +38,9 @@ settings = get_settings()
 FRONTEND_DIR = BACKEND_DIR.parent / "frontend"
 
 app = Flask(__name__)
+
+# Disable strict slashes to prevent redirects that lose auth headers
+app.url_map.strict_slashes = False
 
 # Set max content length to 50MB to handle large image uploads
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB
@@ -125,6 +130,7 @@ app.register_blueprint(payments_bp)
 app.register_blueprint(analytics_bp)
 app.register_blueprint(training_bp)
 app.register_blueprint(forum_bp)
+app.register_blueprint(chatbot_bp)
 
 store = PredictionStore(settings.mongodb_uri, settings.mongodb_db, settings.mongodb_collection)
 
@@ -136,60 +142,145 @@ fruit_fallback = HeuristicFruitClassifier()
 leaf_fallback = HeuristicLeafClassifier()
 
 # Confidence threshold for Bignay detection
-# If confidence is below this threshold, the image might not be a Bignay
-BIGNAY_CONFIDENCE_THRESHOLD = 0.60
-# Minimum acceptable confidence to consider image might be related
-MIN_CONFIDENCE_THRESHOLD = 0.40
+# Balance between accepting blurry/distant bignay and rejecting non-bignay items
+BIGNAY_CONFIDENCE_THRESHOLD = 0.45  # Main threshold for confident detection
+MIN_CONFIDENCE_THRESHOLD = 0.30  # Minimum to consider - below this is definitely not bignay
+# Very low threshold - image enhancement should help real bignay exceed this
+ABSOLUTE_MIN_THRESHOLD = 0.25
 
 
-def _is_bignay_image(confidence: float, features: Any) -> dict:
+def _is_bignay_image(confidence: float, features: Any, image_quality: Any = None) -> dict:
     """
     Determines if the image is likely a Bignay fruit or leaf based on:
     1. Model confidence score
     2. Image features (color analysis)
+    3. Image quality assessment
     
-    Returns a dict with detection status and reason.
+    Balances accepting blurry/distant bignay while rejecting non-bignay items.
+    Returns a dict with detection status, confidence level, and reason.
     """
-    # Check confidence threshold
-    if confidence < MIN_CONFIDENCE_THRESHOLD:
-        return {
-            "is_bignay": False,
-            "confidence_level": "very_low",
-            "reason": "The image does not appear to be a Bignay fruit or leaf. The model confidence is too low."
-        }
+    # Build quality context for better feedback
+    quality_issues = image_quality.issues if image_quality else []
+    quality_recommendations = image_quality.recommendations if image_quality else []
+    overall_quality = image_quality.overall_quality if image_quality else "unknown"
     
-    if confidence < BIGNAY_CONFIDENCE_THRESHOLD:
-        return {
-            "is_bignay": False,
-            "confidence_level": "low", 
-            "reason": "The image might not be a Bignay. Please ensure you're scanning a Bignay fruit or leaf."
-        }
-    
-    # Additional color-based validation for Bignay
-    # Bignay fruits are typically dark purple/red when ripe, green when unripe
-    # Bignay leaves are typically green
+    # Color-based validation for Bignay (check early to help with non-bignay rejection)
+    # Bignay fruits: dark purple/red when ripe, green when unripe
+    # Bignay leaves: green
     hsv_mean = features.color_hsv_mean
     h, s, v = hsv_mean
     
-    # Very unusual colors that don't match Bignay (e.g., bright blue, orange, yellow)
-    # HSV hue ranges: Red ~0-10, 160-180; Green ~35-85; Purple ~120-160
-    is_typical_bignay_color = (
-        (h <= 20) or  # Red/dark red
-        (h >= 140) or  # Purple/dark purple  
-        (30 <= h <= 90)  # Green (for unripe or leaves)
-    )
+    # Define typical Bignay color ranges
+    # HSV hue: Red ~0-15 or 165-180; Green ~35-85; Purple/Magenta ~130-165
+    is_red_purple = (h <= 20) or (h >= 130)  # Red, purple, magenta range
+    is_green = (35 <= h <= 90)  # Green range for unripe or leaves
+    is_typical_bignay_color = is_red_purple or is_green
     
-    if not is_typical_bignay_color and s > 50:
+    # Detect clearly non-bignay colors (orange, yellow, bright blue, etc.)
+    is_orange_yellow = (20 < h < 35) and s > 50  # Orange/yellow fruits
+    is_blue_cyan = (90 < h < 130) and s > 40  # Blue/cyan - not bignay
+    is_clearly_not_bignay_color = is_orange_yellow or is_blue_cyan
+    
+    # STEP 1: Absolute minimum threshold - below this is definitely not bignay
+    if confidence < ABSOLUTE_MIN_THRESHOLD:
+        reason = "The image does not appear to be a Bignay fruit or leaf."
+        if quality_issues:
+            reason += f" Issues: {', '.join(quality_issues[:2])}."
+        else:
+            reason += " Model confidence is very low."
+        
+        return {
+            "is_bignay": False,
+            "confidence_level": "very_low",
+            "reason": reason,
+            "quality_issues": quality_issues,
+            "quality_recommendations": quality_recommendations
+        }
+    
+    # STEP 2: Color-based rejection for clearly non-bignay colors
+    if is_clearly_not_bignay_color and confidence < 0.60:
+        # Strong color mismatch + low confidence = not bignay
         return {
             "is_bignay": False,
             "confidence_level": "color_mismatch",
-            "reason": "The image color profile does not match typical Bignay fruit or leaf colors."
+            "reason": "The image color does not match Bignay. Bignay fruits are typically dark purple/red (ripe) or green (unripe).",
+            "quality_issues": quality_issues,
+            "quality_recommendations": ["Make sure you're scanning a Bignay fruit or leaf"]
         }
+    
+    # STEP 3: Check if below minimum threshold
+    if confidence < MIN_CONFIDENCE_THRESHOLD:
+        # Below minimum AND not a typical bignay color = reject
+        if not is_typical_bignay_color:
+            return {
+                "is_bignay": False,
+                "confidence_level": "low",
+                "reason": "The image does not appear to be a Bignay. Color and confidence do not match expected values.",
+                "quality_issues": quality_issues,
+                "quality_recommendations": quality_recommendations
+            }
+        
+        # Below minimum but has bignay-like color AND poor image quality = might be bignay
+        if overall_quality in ["poor", "acceptable"] and is_typical_bignay_color:
+            return {
+                "is_bignay": True,
+                "confidence_level": "very_low",
+                "reason": "Detection confidence is very low, but color profile matches Bignay.",
+                "quality_issues": quality_issues,
+                "quality_recommendations": quality_recommendations,
+                "warning": "Results may be inaccurate. Try capturing a clearer image."
+            }
+        
+        # Below minimum, okay color, good quality = probably not bignay
+        return {
+            "is_bignay": False,
+            "confidence_level": "low",
+            "reason": "The image might not be a Bignay fruit or leaf. Please verify.",
+            "quality_issues": quality_issues,
+            "quality_recommendations": quality_recommendations
+        }
+    
+    # STEP 4: Between MIN and BIGNAY threshold - accept with warnings
+    if confidence < BIGNAY_CONFIDENCE_THRESHOLD:
+        warning_msg = "Results may be less accurate due to low confidence."
+        if quality_issues:
+            warning_msg = f"Results may be affected by: {', '.join(quality_issues[:2])}."
+        
+        return {
+            "is_bignay": True,
+            "confidence_level": "low",
+            "reason": None,
+            "quality_issues": quality_issues,
+            "quality_recommendations": quality_recommendations,
+            "warning": warning_msg
+        }
+    
+    # STEP 5: Above threshold - confident detection
+    # Even with good confidence, warn if color is unusual
+    if not is_typical_bignay_color and s > 60 and confidence < 0.65:
+        return {
+            "is_bignay": True,
+            "confidence_level": "medium",
+            "reason": None,
+            "quality_issues": quality_issues,
+            "quality_recommendations": ["Color appears unusual - verify if needed"],
+            "warning": "Color profile is atypical for Bignay"
+        }
+    
+    # Determine confidence level for good detections
+    if confidence >= 0.70:
+        confidence_level = "high"
+    elif confidence >= 0.55:
+        confidence_level = "medium"
+    else:
+        confidence_level = "low"
     
     return {
         "is_bignay": True,
-        "confidence_level": "high" if confidence >= 0.75 else "medium",
-        "reason": None
+        "confidence_level": confidence_level,
+        "reason": None,
+        "quality_issues": quality_issues,
+        "quality_recommendations": quality_recommendations if confidence < 0.60 else []
     }
 
 
@@ -285,23 +376,51 @@ def predict():
     image_sha256 = sha256_bytes(img_bytes)
     image_bgr = decode_image_bytes(img_bytes)
 
+    # Extract features for quality assessment
     features = extract_features(image_bgr)
+    
+    # Assess image quality first
+    image_quality = assess_image_quality(image_bgr, features.mask_coverage)
+    
+    # Apply image enhancement for better detection of blurry/distant images
+    enhanced_image = enhance_image_for_detection(image_bgr)
+    
     mold_heuristic = _mold_flag_from_image(image_bgr)
 
-    # Model inference (if models exist) else fallback heuristics
-    input_tensor = resize_for_model(image_bgr, 224)
+    # Model inference with enhanced image for better detection
+    # Try both original and enhanced image, use the one with higher confidence
+    input_tensor_original = resize_for_model(image_bgr, 224)
+    input_tensor_enhanced = resize_for_model(enhanced_image, 224)
 
     fruit_pred = None
     leaf_pred = None
+    used_enhanced = False
 
     if subject == "fruit":
         if fruit_model.available():
-            fruit_pred = fruit_model.predict(input_tensor)
+            # Try both original and enhanced, use best result
+            pred_original = fruit_model.predict(input_tensor_original)
+            pred_enhanced = fruit_model.predict(input_tensor_enhanced)
+            
+            # Use the prediction with higher confidence
+            if pred_enhanced.confidence > pred_original.confidence:
+                fruit_pred = pred_enhanced
+                used_enhanced = True
+            else:
+                fruit_pred = pred_original
         else:
             fruit_pred = fruit_fallback.predict_from_features(features)
     else:
         if leaf_model.available():
-            leaf_pred = leaf_model.predict(input_tensor)
+            # Try both original and enhanced, use best result
+            pred_original = leaf_model.predict(input_tensor_original)
+            pred_enhanced = leaf_model.predict(input_tensor_enhanced)
+            
+            if pred_enhanced.confidence > pred_original.confidence:
+                leaf_pred = pred_enhanced
+                used_enhanced = True
+            else:
+                leaf_pred = pred_original
         else:
             leaf_pred = leaf_fallback.predict_from_features(features)
 
@@ -333,9 +452,9 @@ def predict():
     ripeness_stage = fruit_obj.get("ripeness_stage") if fruit_obj else None
     quality = fruit_obj.get("quality") if fruit_obj else None
 
-    # Check if the image is actually a Bignay
+    # Check if the image is actually a Bignay (with image quality context)
     current_confidence = float((fruit_obj or leaf_obj or {}).get("confidence", 0.0))
-    bignay_detection = _is_bignay_image(current_confidence, features)
+    bignay_detection = _is_bignay_image(current_confidence, features, image_quality)
 
     rec = recommend(ripeness_stage=ripeness_stage, mold_present=mold_present, quality=quality)
 
@@ -350,6 +469,15 @@ def predict():
             "leaf": None,
             "is_bignay": False,
             "detection": bignay_detection,
+            "image_quality": {
+                "overall": image_quality.overall_quality,
+                "blur_score": image_quality.blur_score,
+                "brightness_score": image_quality.brightness_score,
+                "contrast_score": image_quality.contrast_score,
+                "subject_size_score": image_quality.subject_size_score,
+                "issues": image_quality.issues,
+                "recommendations": image_quality.recommendations,
+            },
             "color": {
                 "hsv_mean": features.color_hsv_mean,
                 "lab_mean": features.color_lab_mean,
@@ -362,16 +490,25 @@ def predict():
                 "primary": "Please scan a Bignay fruit or leaf",
                 "alternatives": [],
                 "reason": bignay_detection["reason"],
+                "tips": image_quality.recommendations,
             },
             "debug": {
                 "mold_heuristic": mold_heuristic,
                 "fruit_model_available": fruit_model.available(),
                 "leaf_model_available": leaf_model.available(),
                 "detection_reason": bignay_detection["reason"],
+                "used_enhanced_image": used_enhanced,
             },
             "time": datetime.now(timezone.utc).isoformat(),
         }
     else:
+        # Build recommendation with quality-aware tips
+        quality_tips = []
+        if bignay_detection.get("warning"):
+            quality_tips.append(bignay_detection["warning"])
+        if image_quality.overall_quality != "good" and image_quality.recommendations:
+            quality_tips.extend(image_quality.recommendations[:2])
+        
         response = {
             # Backwards-compatible fields used by existing frontend
             "result": (fruit_obj or leaf_obj or {}).get("class", "unknown"),
@@ -384,6 +521,15 @@ def predict():
             "image_sha256": image_sha256,
             "fruit": fruit_obj,
             "leaf": leaf_obj,
+            "image_quality": {
+                "overall": image_quality.overall_quality,
+                "blur_score": image_quality.blur_score,
+                "brightness_score": image_quality.brightness_score,
+                "contrast_score": image_quality.contrast_score,
+                "subject_size_score": image_quality.subject_size_score,
+                "issues": image_quality.issues,
+                "recommendations": image_quality.recommendations,
+            },
             "color": {
                 "hsv_mean": features.color_hsv_mean,
                 "lab_mean": features.color_lab_mean,
@@ -396,11 +542,13 @@ def predict():
                 "primary": rec.primary,
                 "alternatives": rec.alternatives,
                 "reason": rec.reason,
+                "tips": quality_tips,
             },
             "debug": {
                 "mold_heuristic": mold_heuristic,
                 "fruit_model_available": fruit_model.available(),
                 "leaf_model_available": leaf_model.available(),
+                "used_enhanced_image": used_enhanced,
             },
             "time": datetime.now(timezone.utc).isoformat(),
         }

@@ -172,6 +172,7 @@ def checkout():
 
 
 @orders_bp.route('/', methods=['GET'])
+@orders_bp.route('', methods=['GET'])  # Also handle without trailing slash to avoid redirect
 @require_auth
 def get_my_orders():
     """Get current user's orders"""

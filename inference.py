@@ -25,14 +25,31 @@ class KerasClassifier:
         return list(self._classes)
 
     def available(self) -> bool:
-        return self._model_path.exists()
+        # Check for both .keras and .h5 formats
+        keras_path = self._model_path.with_suffix('.keras')
+        h5_path = self._model_path.with_suffix('.h5')
+        return keras_path.exists() or h5_path.exists() or self._model_path.exists()
 
     def _load(self):
         if self._model is not None:
             return
         import tensorflow as tf  # lazy import
 
-        self._model = tf.keras.models.load_model(str(self._model_path))
+        # Try .keras format first (newer), then .h5 (legacy)
+        keras_path = self._model_path.with_suffix('.keras')
+        h5_path = self._model_path.with_suffix('.h5')
+        
+        if keras_path.exists():
+            self._model = tf.keras.models.load_model(str(keras_path))
+            print(f"Loaded model from {keras_path}")
+        elif h5_path.exists():
+            self._model = tf.keras.models.load_model(str(h5_path))
+            print(f"Loaded model from {h5_path}")
+        elif self._model_path.exists():
+            self._model = tf.keras.models.load_model(str(self._model_path))
+            print(f"Loaded model from {self._model_path}")
+        else:
+            raise FileNotFoundError(f"No model found at {self._model_path}")
 
     def predict(self, input_tensor: np.ndarray) -> ClassifierResult:
         self._load()

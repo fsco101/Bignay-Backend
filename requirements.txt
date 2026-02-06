@@ -8,6 +8,7 @@ cloudinary>=1.36
 PyJWT>=2.8
 bcrypt>=4.0
 reportlab>=4.0
+google-generativeai>=0.7
 
 # TensorFlow is optional for this repo to run (heuristics are used if model files are missing)
 # If you want real ML inference, install a compatible TF build for your Python version:
