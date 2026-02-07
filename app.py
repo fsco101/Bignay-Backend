@@ -32,6 +32,7 @@ from routes.payments import payments_bp
 from routes.analytics import analytics_bp
 from routes.training import training_bp
 from routes.forum import forum_bp
+from routes.heatmap import heatmap_bp
 
 settings = get_settings()
 
@@ -89,6 +90,13 @@ def init_database():
             app.config['db_forum'].create_index('is_published')
             app.config['db_forum'].create_index([('title', 'text'), ('content', 'text')])
             
+            # Harvest pins collection (Harvest Map)
+            app.config['db_harvest_pins'] = db['harvest_pins']
+            app.config['db_harvest_pins'].create_index([('latitude', 1), ('longitude', 1)])
+            app.config['db_harvest_pins'].create_index('pin_type')
+            app.config['db_harvest_pins'].create_index('is_active')
+            app.config['db_harvest_pins'].create_index('created_by')
+            
             print("✓ MongoDB collections initialized successfully")
         except Exception as e:
             print(f"✗ Failed to initialize MongoDB: {e}")
@@ -97,12 +105,14 @@ def init_database():
             app.config['db_orders'] = None
             app.config['db_reviews'] = None
             app.config['db_forum'] = None
+            app.config['db_harvest_pins'] = None
     else:
         app.config['db_users'] = None
         app.config['db_products'] = None
         app.config['db_orders'] = None
         app.config['db_reviews'] = None
         app.config['db_forum'] = None
+        app.config['db_harvest_pins'] = None
         print("✗ MongoDB URI not configured - marketplace features will be disabled")
 
 # Initialize database
@@ -131,6 +141,7 @@ app.register_blueprint(analytics_bp)
 app.register_blueprint(training_bp)
 app.register_blueprint(forum_bp)
 app.register_blueprint(chatbot_bp)
+app.register_blueprint(heatmap_bp)
 
 store = PredictionStore(settings.mongodb_uri, settings.mongodb_db, settings.mongodb_collection)
 
